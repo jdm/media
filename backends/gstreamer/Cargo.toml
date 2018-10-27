@@ -10,6 +10,9 @@ zip = "0.3.1"
 [dependencies.byte-slice-cast]
 version = "0.2"
 
+[dependencies.failure]
+version = "*"
+
 [dependencies.glib]
 version = "0.6"
 
@@ -28,11 +31,23 @@ version = "0.12"
 [dependencies.gstreamer-video]
 version = "0.12"
 
+[dependencies.gstreamer-sdp]
+version = "0.12"
+
+[dependencies.gstreamer-webrtc]
+version = "0.12"
+
 [dependencies.ipc-channel]
 version = "0.11"
+
+[dependencies.lazy_static]
+version = "*"
 
 [dependencies.servo-media-audio]
 path = "../../audio"
 
 [dependencies.servo-media-player]
 path = "../../player"
+
+[dependencies.servo-media-webrtc]
+path = "../../webrtc"
