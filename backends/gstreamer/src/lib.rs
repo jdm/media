@@ -1,5 +1,4 @@
 extern crate byte_slice_cast;
-#[macro_use]
 extern crate failure;
 extern crate glib;
 extern crate gstreamer as gst;
