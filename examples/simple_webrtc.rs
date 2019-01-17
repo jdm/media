@@ -17,7 +17,7 @@ extern crate websocket;
 
 use rand::Rng;
 use servo_media::ServoMedia;
-use servo_media::webrtc::{RTCSessionDescription, WebRtcController, WebRtcSignaller};
+use servo_media::webrtc::*;
 use std::env;
 use std::net;
 use std::sync::{Arc, mpsc};
@@ -147,10 +147,10 @@ impl WebRtcSignaller for Signaller {
         self.0.send(OwnedMessage::Text(message)).unwrap();
     }
 
-    fn send_ice_candidate(&self, mline_index: u32, candidate: String) {
+    fn on_ice_candidate(&self, candidate: IceCandidate) {
         let message = serde_json::to_string(&JsonMsg::Ice {
-            candidate,
-            sdp_mline_index: mline_index,
+            candidate: candidate.candidate,
+            sdp_mline_index: candidate.sdp_mline_index,
         }).unwrap();
         self.0.send(OwnedMessage::Text(message)).unwrap();
     }
@@ -204,7 +204,7 @@ fn receive_loop(
 
                             match json_msg {
                                 JsonMsg::Sdp { type_, sdp } => {
-                                    let desc = RTCSessionDescription {
+                                    let desc = SessionDescription {
                                         type_: type_.parse().unwrap(),
                                         sdp: sdp.into()
                                     };
@@ -213,7 +213,12 @@ fn receive_loop(
                                 JsonMsg::Ice {
                                     sdp_mline_index,
                                     candidate,
-                                } => state.webrtc.as_ref().unwrap().notify_ice(sdp_mline_index, candidate),
+                                } => {
+                                    let candidate = IceCandidate {
+                                        sdp_mline_index, candidate
+                                    };
+                                    state.webrtc.as_ref().unwrap().add_ice_candidate(candidate)
+                                }
                             };
                         }
                     }

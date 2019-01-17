@@ -2,14 +2,15 @@ use std::str::FromStr;
 
 pub trait WebRtcController: Send {
     fn notify_signal_server_error(&self);
-    fn set_remote_description(&self, RTCSessionDescription);
-    fn notify_ice(&self, sdp_mline_index: u32, candidate: String);
+    fn set_remote_description(&self, SessionDescription);
+    fn set_local_description(&self, SessionDescription);
+    fn add_ice_candidate(&self, candidate: IceCandidate);
     fn trigger_negotiation(&self);
 }
 
 pub trait WebRtcSignaller: Send {
     fn send_sdp_offer(&self, offer: String);
-    fn send_ice_candidate(&self, mlineindex: u32, candidate: String);
+    fn on_ice_candidate(&self, candidate: IceCandidate);
     fn close(&self, reason: String);
 }
 
@@ -19,38 +20,51 @@ pub trait WebRtcBackend {
     fn start_webrtc_controller(signaller: Box<WebRtcSignaller>) -> Self::Controller;
 }
 
-pub enum RTCSdpType {
+/// https://www.w3.org/TR/webrtc/#rtcsdptype
+pub enum SdpType {
     Answer,
     Offer,
     Pranswer,
     Rollback,
 }
 
-impl RTCSdpType {
+impl SdpType {
     pub fn as_str(self) -> &'static str {
         match self {
-            RTCSdpType::Answer => "answer",
-            RTCSdpType::Offer => "offer",
-            RTCSdpType::Pranswer => "pranswer",
-            RTCSdpType::Rollback => "rollback",
+            SdpType::Answer => "answer",
+            SdpType::Offer => "offer",
+            SdpType::Pranswer => "pranswer",
+            SdpType::Rollback => "rollback",
         }
     }
 }
 
-impl FromStr for RTCSdpType {
+impl FromStr for SdpType {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, ()> {
         Ok(match s {
-            "answer" => RTCSdpType::Answer,
-            "offer" => RTCSdpType::Offer,
-            "pranswer" => RTCSdpType::Pranswer,
-            "rollback" => RTCSdpType::Rollback,
+            "answer" => SdpType::Answer,
+            "offer" => SdpType::Offer,
+            "pranswer" => SdpType::Pranswer,
+            "rollback" => SdpType::Rollback,
             _ => return Err(())
         })
     }
 }
 
-pub struct RTCSessionDescription {
-    pub type_: RTCSdpType,
+/// https://www.w3.org/TR/webrtc/#rtcsessiondescription-class
+///
+/// https://developer.mozilla.org/en-US/docs/Web/API/RTCSessionDescription
+pub struct SessionDescription {
+    pub type_: SdpType,
     pub sdp: String,
+}
+
+/// https://www.w3.org/TR/webrtc/#rtcicecandidate-interface
+///
+/// https://developer.mozilla.org/en-US/docs/Web/API/RTCIceCandidate
+pub struct IceCandidate {
+    pub sdp_mline_index: u32,
+    pub candidate: String,
+    // XXXManishearth this is missing a bunch
 }
