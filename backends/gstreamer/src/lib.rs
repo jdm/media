@@ -23,6 +23,7 @@ use servo_media_webrtc::{WebRtcBackend, WebRtcSignaller};
 
 pub mod audio_decoder;
 pub mod audio_sink;
+pub mod media_stream;
 pub mod player;
 pub mod webrtc;
 
@@ -56,5 +57,9 @@ impl WebRtcBackend for GStreamerBackend {
 impl GStreamerBackend {
     pub fn init() {
         gst::init().unwrap();
+    }
+
+    pub fn create_mediastream() -> media_stream::GStreamerMediaStream {
+        media_stream::GStreamerMediaStream
     }
 }
