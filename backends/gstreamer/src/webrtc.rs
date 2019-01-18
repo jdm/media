@@ -33,6 +33,8 @@ enum AppState {
     PeerConnectionError,
     PeerConnected,
     PeerCallNegotiating = 4000,
+    PeerCallNegotiatingHaveLocal,
+    PeerCallNegotiatingHaveRemote,
     PeerCallStarted,
     PeerCallError,
 }
@@ -40,7 +42,19 @@ enum AppState {
 #[derive(Clone)]
 pub struct GStreamerWebRtcController(Arc<Mutex<WebRtcControllerState>>);
 
+macro_rules! assert_state {
+    ($controller:ident, $state:ident, $condition:expr, $string:expr) => {
+        {
+            let $state = $controller.0.lock().unwrap().app_state;
+            assert!($condition, $string);
+        }
+    }
+}
+
 impl WebRtcController for GStreamerWebRtcController {
+    fn init(&self, audio: &MediaStream, video: &MediaStream) {
+        self.0.lock().unwrap().start_pipeline(self.clone(), audio, video)
+    }
     fn trigger_negotiation(&self) {
         let app_control = self.0.lock().unwrap();
         app_control
@@ -66,22 +80,33 @@ impl WebRtcController for GStreamerWebRtcController {
     }
 
     fn set_remote_description(&self, desc: SessionDescription, cb: SendBoxFnOnce<'static, ()>) {
-        if !self.assert_app_state_is(AppState::PeerCallNegotiating, "Not ready to handle sdp") {
-            return;
-        }
+        assert_state!(self, state,
+                      state == AppState::PeerCallNegotiating || state == AppState::PeerCallNegotiatingHaveLocal,
+                      "Not ready to handle sdp");
 
         self.set_description(desc, false, cb);
 
         let mut app_control = self.0.lock().unwrap();
-        app_control.app_state = AppState::PeerCallStarted;
+        if app_control.app_state == AppState::PeerCallNegotiating {
+            app_control.app_state = AppState::PeerCallNegotiatingHaveRemote;
+        } else {
+            app_control.app_state = AppState::PeerCallStarted;
+        }
     }
 
     fn set_local_description(&self, desc: SessionDescription, cb: SendBoxFnOnce<'static, ()>) {
-        if !self.assert_app_state_is(AppState::PeerCallNegotiating, "Not ready to handle sdp") {
-            return;
-        }
+        assert_state!(self, state,
+                      state == AppState::PeerCallNegotiating || state == AppState::PeerCallNegotiatingHaveRemote,
+                      "Not ready to handle sdp");
 
         self.set_description(desc, true, cb);
+
+        let mut app_control = self.0.lock().unwrap();
+        if app_control.app_state == AppState::PeerCallNegotiating {
+            app_control.app_state = AppState::PeerCallNegotiatingHaveLocal;
+        } else {
+            app_control.app_state = AppState::PeerCallStarted;
+        }
     }
 
     fn create_offer(&self, cb: SendBoxFnOnce<'static, (SessionDescription,)>) {
@@ -90,17 +115,26 @@ impl WebRtcController for GStreamerWebRtcController {
         let this = self.0.lock().unwrap();
         let webrtc = this.webrtc.as_ref().unwrap();;
         let promise = gst::Promise::new_with_change_func(move |promise| {
-            on_offer_created(app_control_clone, promise, cb);
+            on_offer_or_answer_created(SdpType::Offer, app_control_clone, promise, cb);
         });
 
         webrtc.emit("create-offer", &[&None::<gst::Structure>, &promise]).unwrap();
+    }
+
+    fn create_answer(&self, cb: SendBoxFnOnce<'static, (SessionDescription,)>) {
+
+        let app_control_clone = self.clone();
+        let this = self.0.lock().unwrap();
+        let webrtc = this.webrtc.as_ref().unwrap();;
+        let promise = gst::Promise::new_with_change_func(move |promise| {
+            on_offer_or_answer_created(SdpType::Answer, app_control_clone, promise, cb);
+        });
+
+        webrtc.emit("create-answer", &[&None::<gst::Structure>, &promise]).unwrap();
     } 
 }
 
 impl GStreamerWebRtcController {
-    fn start_pipeline(&self, audio: &MediaStream, video: &MediaStream) {
-        self.0.lock().unwrap().start_pipeline(self.clone(), audio, video)
-    }
 
     fn set_description(&self, desc: SessionDescription, local: bool, cb: SendBoxFnOnce<'static, ()>) {
         let ty = match desc.type_ {
@@ -125,26 +159,6 @@ impl GStreamerWebRtcController {
             .unwrap()
             .emit(kind, &[&answer, &promise])
             .unwrap();
-    }
-
-    fn assert_app_state_is(&self, state: AppState, error_msg: &'static str) -> bool {
-        if self.0.lock().unwrap().app_state != state {
-            self.send_bus_error(error_msg);
-
-            false
-        } else {
-            true
-        }
-    }
-
-    fn assert_app_state_is_at_least(&self, state: AppState, error_msg: &'static str) -> bool {
-        if self.0.lock().unwrap().app_state < state {
-            self.send_bus_error(error_msg);
-
-            false
-        } else {
-            true
-        }
     }
 
     //#[allow(unused)]
@@ -253,10 +267,8 @@ impl WebRtcControllerState {
     }
 }
 
-pub fn start(
+pub fn construct(
     signaller: Box<WebRtcSignaller>,
-    audio: &MediaStream,
-    video: &MediaStream,
 ) -> GStreamerWebRtcController {
     let main_loop = glib::MainLoop::new(None, false);
     let pipeline = gst::Pipeline::new("main");
@@ -269,77 +281,33 @@ pub fn start(
         app_state: AppState::ServerConnected,
         _main_loop: main_loop,
     };
-    let controller = GStreamerWebRtcController(Arc::new(Mutex::new(controller)));
-    controller.start_pipeline(audio, video);
-
-    let controller_clone = controller.clone();
-            
-    /*bus.add_watch(move |_, msg| {
-        use gst::message::MessageView;
-
-        match msg.view() {
-            MessageView::Error(err) => controller.close_and_quit(&Error::from(err.get_error())),
-            MessageView::Warning(warning) => {
-                println!("Warning: \"{}\"", warning.get_debug().unwrap());
-            }
-            MessageView::Application(a) => {
-                let struc = a.get_structure().unwrap();
-                if let Err(err) = handle_application_msg(&controller, struc) {
-                    controller.close_and_quit(&err)
-                }
-            }
-            _ => {}
-        };
-
-        glib::Continue(true)
-    });*/
-
-    controller_clone
+    GStreamerWebRtcController(Arc::new(Mutex::new(controller)))
 }
 
-/*fn handle_application_msg(
-    app_control: &GStreamerWebRtcController,
-    struc: &gst::StructureRef,
-) -> Result<(), Error> {
-    match struc.get_name() {
-        "ws-message" => {
-            let msg = struc.get_value("body").unwrap();
-            app_control.on_message(msg.get().unwrap())
-        }
-        "ws-error" => Err(WsError(app_control.0.lock().unwrap().app_state))?,
-        "error" => {
-            let msg: String = struc.get_value("body").unwrap().get().unwrap();
-            Err(BusError(msg))?
-        }
-        u => {
-            println!("Got unknown application message {:?}", u);
-
-            Ok(())
-        }
-    }
-}*/
-
-fn on_offer_created(
+fn on_offer_or_answer_created(
+    ty: SdpType,
     app_control: GStreamerWebRtcController,
     promise: &gst::Promise,
     cb: SendBoxFnOnce<'static, (SessionDescription,)>,
 ) {
-    if !app_control.assert_app_state_is(
-        AppState::PeerCallNegotiating,
-        "Not negotiating call when creating offer",
-    ) {
-        return;
+    debug_assert!(ty == SdpType::Offer || ty == SdpType::Answer);
+    if ty == SdpType::Offer {
+        assert_state!(app_control, state, state == AppState::PeerCallNegotiating,
+                      "Not negotiating call when creating offer")
+    } else {
+        assert_state!(app_control, state, state == AppState::PeerCallNegotiatingHaveRemote,
+                      "No offfer received when creating answer")
     }
 
     let reply = promise.get_reply().unwrap();
 
-    let offer = reply
-        .get_value("offer")
+    let reply = reply
+        .get_value(ty.as_str())
         .unwrap()
         .get::<gst_webrtc::WebRTCSessionDescription>()
         .expect("Invalid argument");
 
-    let type_ = match offer.get_type() {
+    let type_ = match reply.get_type() {
         WebRTCSDPType::Answer => SdpType::Answer,
         WebRTCSDPType::Offer => SdpType::Offer,
         WebRTCSDPType::Pranswer => SdpType::Pranswer,
@@ -348,7 +316,7 @@ fn on_offer_created(
     };
 
     let desc = SessionDescription {
-        sdp: offer.get_sdp().as_text().unwrap(),
+        sdp: reply.get_sdp().as_text().unwrap(),
         type_,
     };
     cb.call(desc);
@@ -451,11 +419,7 @@ fn on_incoming_stream(
 }
 
 fn send_ice_candidate_message(app_control: &GStreamerWebRtcController, values: &[glib::Value]) {
-    if !app_control
-        .assert_app_state_is_at_least(AppState::PeerCallNegotiating, "Can't send ICE, not in call")
-    {
-        return;
-    }
+    assert_state!(app_control, state, state >= AppState::PeerCallNegotiating, "Can't send ICE, not in call");
 
     let _webrtc = values[0].get::<gst::Element>().expect("Invalid argument");
     let sdp_mline_index = values[1].get::<u32>().expect("Invalid argument");
