@@ -24,6 +24,7 @@ use servo_media_webrtc::{WebRtcBackend, WebRtcSignaller};
 
 pub mod audio_decoder;
 pub mod audio_sink;
+pub mod media_capture;
 pub mod media_stream;
 pub mod player;
 pub mod webrtc;
@@ -69,5 +70,13 @@ impl GStreamerBackend {
 
     pub fn create_videostream() -> media_stream::GStreamerMediaStream {
         media_stream::GStreamerMediaStream::create_video()
+    }
+
+    pub fn create_audioinput_stream() -> Option<media_stream::GStreamerMediaStream> {
+        media_capture::create_audioinput_stream()
+    }
+
+    pub fn create_videoinput_stream() -> Option<media_stream::GStreamerMediaStream> {
+        media_capture::create_videoinput_stream()
     }
 }
